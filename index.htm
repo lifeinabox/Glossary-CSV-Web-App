@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DNS Glossary — CSV-backed</title>
+  <style>
+    :root{ --bg:#0f172a; --panel:#111827; --ink:#e5e7eb; --muted:#94a3b8; --ring:#334155; --accent:#22d3ee; --chip:#1f2937; }
+    html,body{height:100%}
+    body{margin:0;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+    header{padding:18px 20px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border-bottom:1px solid var(--ring)}
+    h1{margin:0 0 4px;font-size:clamp(20px,4vw,28px)}
+    .subtitle{color:var(--muted);font-size:14px}
+    .wrap{max-width:1100px;margin:0 auto;padding:18px}
+    .panel{background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,.02));border:1px solid var(--ring);border-radius:14px;padding:12px}
+    .controls{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}
+    .search{position:relative}
+    .search input{width:100%;padding:12px 40px;border-radius:12px;background:#0b1224;color:var(--ink);border:1px solid var(--ring);outline:none}
+    .search input:focus{box-shadow:0 0 0 3px rgba(34,211,238,.25);border-color:var(--accent)}
+    .search svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:.7}
+    .count{color:var(--muted);font-size:13px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-top:12px}
+    .card{background:var(--panel);border:1px solid var(--ring);border-radius:14px;padding:14px}
+    .term{font-weight:700;font-size:16px;margin:0 0 6px}
+    .def{margin:0 0 6px;color:#d1d5db}
+    .tags{display:flex;gap:6px;flex-wrap:wrap}
+    .tag{font-size:12px;background:var(--chip);border:1px solid var(--ring);border-radius:999px;padding:3px 8px;color:var(--muted)}
+    mark{background:transparent;color:var(--accent);font-weight:700}
+    .note{margin-top:10px;color:var(--muted);font-size:12px}
+    .btn{cursor:pointer;background:var(--chip);border:1px solid var(--ring);color:var(--ink);padding:8px 10px;border-radius:10px}
+    .btn:hover{border-color:var(--accent)}
+    footer{color:var(--muted);font-size:12px;max-width:1100px;margin:12px auto 24px;padding:0 18px}
+    code{background:#0b1224;border:1px solid var(--ring);border-radius:6px;padding:0 6px}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap" style="padding:0">
+      <h1>DNS Glossary</h1>
+      <div class="subtitle">This page automatically loads entries from <code>glossary.csv</code>. Edit that file, refresh this page—done.</div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="panel">
+      <div class="controls">
+        <div class="search">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 21L16.65 16.65M19 11C19 15.4183 15.4183 19 11 19C6.58172 19 3 15.4183 3 11C3 6.58172 6.58172 3 11 3C15.4183 3 19 6.58172 19 11Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <input id="q" type="search" placeholder="Search term, definition, or tag… (try: array, HTTP)" autocomplete="off" aria-label="Search glossary" />
+        </div>
+        <div class="count"><span id="shown">0</span>/<span id="total">0</span> shown <button id="reload" class="btn" title="Reload CSV (bust cache)">Reload</button></div>
+      </div>
+      <p id="status" class="note" role="status"></p>
+    </div>
+
+    <div id="grid" class="grid" aria-live="polite"></div>
+  </div>
+
+  <footer>
+    Place a <code>glossary.csv</code> file alongside this HTML. Expected headers: <code>term,definition,tags</code>. Tags optional; separate with <code>|</code> or commas. Lines starting with <code>#</code> are ignored. If the CSV can't be loaded, a small built‑in sample is used so you can see the UI.
+  </footer>
+
+  <script>
+    // -------- Config --------
+    const CSV_PATH = 'glossary.csv'; // Change if your file lives elsewhere
+
+    // -------- Elements --------
+    const $ = s=>document.querySelector(s);
+    const grid = $('#grid');
+    const q = $('#q');
+    const shownEl = $('#shown');
+    const totalEl = $('#total');
+    const statusEl = $('#status');
+    const reloadBtn = $('#reload');
+
+    // -------- State --------
+    let DATA = [];
+    let FILTERED = [];
+
+    // -------- CSV Parser (robust, supports quotes & commas) --------
+    function csvParse(text){
+      if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // strip BOM
+      const rows = [];
+      let i=0, field='', row=[], inQuotes=false;
+      const pushField = ()=>{ row.push(field); field=''; };
+      const pushRow = ()=>{ if(row.length) rows.push(row); row=[]; };
+      while(i < text.length){
+        const c = text[i];
+        if(inQuotes){
+          if(c==='"'){
+            if(text[i+1]==='"'){ field+='"'; i++; } else { inQuotes=false; }
+          } else { field += c; }
+        } else {
+          if(c==='"') inQuotes = true;
+          else if(c===',') pushField();
+          else if(c==='\n'){ pushField(); pushRow(); }
+          else if(c==='\r'){ /* ignore */ }
+          else field += c;
+        }
+        i++;
+      }
+      if(field.length || row.length){ pushField(); pushRow(); }
+      return rows.filter(r => r.join('').trim()!=='' && !(r[0]||'').trim().startsWith('#'));
+    }
+
+    function toRecords(rows){
+      if(!rows.length) return [];
+      const headers = rows[0].map(h => (h||'').toLowerCase().trim());
+      const iTerm = headers.indexOf('term');
+      const iDef = headers.indexOf('definition');
+      const iTags = headers.indexOf('tags');
+      const recs = [];
+      for(let i=1;i<rows.length;i++){
+        const r = rows[i];
+        const term = (r[iTerm]||'').trim();
+        const definition = (r[iDef]||'').trim();
+        const rawTags = (iTags>=0 ? (r[iTags]||'') : '').trim();
+        if(!term && !definition) continue;
+        const tags = rawTags ? rawTags.split(/\||,/).map(t=>t.trim()).filter(Boolean) : [];
+        recs.push({term, definition, tags});
+      }
+      return recs;
+    }
+
+    // -------- Rendering & Search --------
+    function escapeHTML(s){return s.replace(/[&<>\"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));}
+    function escapeRegExp(s){return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
+    function highlight(text, query){
+      if(!query) return escapeHTML(text);
+      const re = new RegExp(`(${escapeRegExp(query)})`,'ig');
+      return escapeHTML(text).replace(re,'<mark>$1</mark>');
+    }
+
+    function render(list, query=''){
+      const frag = document.createDocumentFragment();
+      grid.innerHTML = '';
+      list.forEach(x=>{
+        const el = document.createElement('article');
+        el.className = 'card';
+        el.innerHTML = `
+          <h3 class="term">${highlight(x.term, query)}</h3>
+          <p class="def">${highlight(x.definition, query)}</p>
+          <div class="tags">${(x.tags||[]).map(t=>`<span class="tag">${highlight(t, query)}</span>`).join('')}</div>
+        `;
+        frag.appendChild(el);
+      });
+      grid.appendChild(frag);
+      shownEl.textContent = String(list.length);
+      totalEl.textContent = String(DATA.length);
+    }
+
+    function search(query){
+      const ql = query.trim().toLowerCase();
+      if(!ql){ FILTERED = DATA.slice(); return render(FILTERED,''); }
+      FILTERED = DATA.filter(({term,definition,tags}) => {
+        const hay = `${term}\n${definition}\n${(tags||[]).join('\n')}`.toLowerCase();
+        return ql.split(/\s+/).every(tok => hay.includes(tok));
+      });
+      render(FILTERED, query);
+    }
+
+    function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+
+    q.addEventListener('input', debounce(()=> search(q.value), 80));
+    window.addEventListener('keydown', e=>{ if(e.key==='/' && document.activeElement!==q){ e.preventDefault(); q.focus(); } if(e.key==='Escape'&&q.value){ q.value=''; search(''); }});
+
+    // -------- Data Loading --------
+    const SAMPLE = `term,definition,tags\nArray,A data structure that holds an ordered list of values.,javascript|data\nAPI,"A defined interface for interacting with a system; often via HTTP.",web,backend\nAlgorithm,"A step-by-step procedure for solving a problem.",cs\nCSS,"A stylesheet language for describing presentation.",web,frontend\nHTML,Markup language for web documents.,web,frontend\nHTTP,"Application protocol for distributed hypermedia systems.",web\nJSON,"A lightweight data-interchange format.",data,web\nVariable,"A named storage location that can hold a value.",javascript|python|cs\nFunction,"A reusable block of code that performs a specific task.",javascript|python\nRecursion,"A technique where a function calls itself.",cs\n`;
+
+    async function loadCSV(){
+      statusEl.textContent = 'Loading glossary.csv…';
+      try{
+        const res = await fetch(`${CSV_PATH}?_=${Date.now()}`, {cache:'no-cache'});
+        if(!res.ok) throw new Error('HTTP '+res.status);
+        const text = await res.text();
+        const rows = csvParse(text);
+        DATA = toRecords(rows);
+        totalEl.textContent = String(DATA.length);
+        statusEl.textContent = `Loaded ${DATA.length} rows from ${CSV_PATH}`;
+        search(q.value||'');
+      } catch(err){
+        console.warn('Failed to load CSV, using sample:', err);
+        const rows = csvParse(SAMPLE);
+        DATA = toRecords(rows);
+        totalEl.textContent = String(DATA.length);
+        statusEl.textContent = `Could not load ${CSV_PATH}. Using built‑in sample (edit your CSV and click Reload).`;
+        search('');
+      }
+    }
+
+    reloadBtn.addEventListener('click', loadCSV);
+
+    // Init
+    loadCSV();
+  </script>
+</body>
+</html>

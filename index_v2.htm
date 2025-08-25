@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Glossary CSV — Web App</title>
+  <style>
+    :root{
+      --bg:#0f172a; --panel:#111827; --ink:#e5e7eb; --muted:#94a3b8; --ring:#334155; --accent:#22d3ee; --chip:#1f2937; --card:#0b1224;
+    }
+    :root[data-theme="light"], [data-theme="light"]{
+      --bg:#f8fafc; --panel:#ffffff; --ink:#0b1224; --muted:#475569; --ring:#e2e8f0; --accent:#0891b2; --chip:#f1f5f9; --card:#ffffff;
+    }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif; margin: 0; background: var(--bg); color: var(--ink); }
+    header { padding: 1rem; text-align: center; background: var(--panel); border-bottom:1px solid var(--ring); }
+    h1 { margin: 0; font-size: 1.5rem; }
+    .subtitle{ color: var(--muted); font-size: .9rem; margin-top:.25rem }
+
+    .toolbar { display: grid; grid-template-columns: 1fr auto; gap: .75rem; align-items: center; padding: 1rem; }
+    .searchwrap{ position:relative }
+    input[type="search"] { width:100%; padding: .65rem 2.25rem .65rem 2.25rem; border-radius: .65rem; border: 1px solid var(--ring); background: var(--card); color: var(--ink); outline: none; }
+    input[type="search"]:focus{ box-shadow:0 0 0 3px rgba(34,211,238,.25); border-color: var(--accent); }
+    .searchwrap svg{ position:absolute; left:.6rem; top:50%; transform:translateY(-50%); opacity:.7 }
+    .righttools{ display:flex; gap:.5rem; align-items:center; justify-content:flex-end }
+    .btn{ cursor:pointer; background:var(--chip); border:1px solid var(--ring); color:var(--ink); padding:.5rem .7rem; border-radius:.6rem; font-size:.85rem }
+    .btn:hover{ border-color: var(--accent) }
+    .switch{ display:inline-flex; align-items:center; gap:.4rem }
+
+    .az{ display:flex; flex-wrap:wrap; gap:.25rem; padding: 0 1rem .5rem; }
+    .az .chip{ cursor:pointer; user-select:none; padding:.25rem .5rem; border-radius: 999px; border:1px solid var(--ring); background: var(--chip); color: var(--muted); font-size:.8rem }
+    .az .chip.active{ color: var(--ink); border-color: var(--accent) }
+
+    .tagsbar{ display:flex; gap:.35rem; overflow:auto; padding: 0 1rem .5rem; scrollbar-width: thin }
+    .tag{ cursor:pointer; user-select:none; font-size:.75rem; background: var(--chip); border: 1px solid var(--ring); padding:.25rem .6rem; border-radius:999px; color: var(--muted) }
+    .tag.active{ border-color: var(--accent); color: var(--ink) }
+
+    .meta{ display:flex; justify-content:space-between; align-items:center; padding: 0 1rem .5rem; color: var(--muted); font-size:.85rem }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; padding: 1rem; }
+    .card { background: var(--panel); padding: 1rem; border-radius: 0.75rem; border: 1px solid var(--ring); }
+    .term { font-weight: 800; font-size: 1.05rem; margin-bottom: 0.35rem }
+    .def { font-size: 0.92rem; color: var(--ink); opacity:.9 }
+    .ctags { margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.25rem; }
+    .ctags .tag{ pointer-events:auto }
+
+    mark { background: none; color: var(--accent); font-weight: 800; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Glossary CSV</h1>
+    <p class="subtitle">Loads <code>glossary.csv</code>. Live search + A–Z jump + tag filters + fuzzy search. Toggle light/dark.</p>
+  </header>
+
+  <div class="toolbar">
+    <div class="searchwrap">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 21L16.65 16.65M19 11C19 15.4183 15.4183 19 11 19C6.58172 19 3 15.4183 3 11C3 6.58172 6.58172 3 11 3C15.4183 3 19 6.58172 19 11Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <input id="q" type="search" placeholder="Search term / definition / tag… (fuzzy on)" autocomplete="off" />
+    </div>
+    <div class="righttools">
+      <label class="switch"><input id="fuzzyToggle" type="checkbox" checked /> Fuzzy</label>
+      <button id="themeBtn" class="btn" title="Toggle light/dark">🌓 Theme</button>
+      <input id="fileInput" type="file" accept=".csv" style="display:none" />
+      <button id="fileBtn" class="btn" title="Load CSV file">📂 Load CSV</button>
+    </div>
+  </div>
+
+  <div class="az" id="azbar"></div>
+  <div class="tagsbar" id="tagsbar" aria-label="All tags"></div>
+  <div class="meta"><div><span id="shown">0</span>/<span id="total">0</span> shown</div><button id="clearFilters" class="btn">Clear filters</button></div>
+
+  <div id="dropzone" style="border:2px dashed var(--ring);border-radius:10px;padding:1.2rem;text-align:center;color:var(--muted);margin:0 1rem 1rem;display:none;">Drop a CSV file here to load it</div>
+  <div id="grid" class="grid"></div>
+
+  <script>
+  const q = document.getElementById('q');
+  const grid = document.getElementById('grid');
+  const shownEl = document.getElementById('shown');
+  const totalEl = document.getElementById('total');
+  const azbar = document.getElementById('azbar');
+  const tagsbar = document.getElementById('tagsbar');
+  const clearBtn = document.getElementById('clearFilters');
+  const themeBtn = document.getElementById('themeBtn');
+  const fuzzyToggle = document.getElementById('fuzzyToggle');
+  const fileInput = document.getElementById('fileInput');
+  const fileBtn = document.getElementById('fileBtn');
+  const dropzone = document.getElementById('dropzone');
+
+  let DATA = [];
+  let activeLetter = '';
+  let activeTags = new Set();
+    // File picker support
+    fileBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', e => {
+      const file = e.target.files && e.target.files[0];
+      if (file) readCSVFile(file);
+    });
+
+    // Drag-and-drop support
+    document.addEventListener('dragover', e => {
+      e.preventDefault();
+      dropzone.style.display = '';
+    });
+    document.addEventListener('dragleave', e => {
+      if (e.target === dropzone || e.pageY < dropzone.offsetTop) dropzone.style.display = 'none';
+    });
+    document.addEventListener('drop', e => {
+      e.preventDefault();
+      dropzone.style.display = 'none';
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file && file.name.endsWith('.csv')) readCSVFile(file);
+    });
+
+    function readCSVFile(file) {
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const text = e.target.result;
+          const rows = csvParse(text);
+          DATA = toRecords(rows);
+          totalEl.textContent = String(DATA.length);
+          buildAZ();
+          buildTagsBar();
+          applyFilters();
+        } catch (err) {
+          grid.innerHTML = `<div class="card"><div class="term">Error</div><div class="def">Could not parse CSV file.</div></div>`;
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // Theme toggle
+    themeBtn.addEventListener('click', () => {
+      const html = document.documentElement;
+      const light = html.getAttribute('data-theme') === 'light';
+      html.setAttribute('data-theme', light ? 'dark' : 'light');
+    });
+
+    // Robust CSV parsing (supports quotes, commas, BOM, comments)
+    function csvParse(text){
+      if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+      const rows = []; let i=0, field='', row=[], inQ=false;
+      const pushF = ()=>{ row.push(field); field=''; };
+      const pushR = ()=>{ if(row.length) rows.push(row); row=[]; };
+      while(i < text.length){
+        const c = text[i];
+          if(inQ){
+            if(c==='"'){
+              if(text[i+1]==='"'){ field+='"'; i++; } else { inQ = false; }
+            } else field += c;
+          } else {
+            if(c==='"') inQ=true;
+            else if(c===',') pushF();
+            else if(c==='\n'){ pushF(); pushR(); }
+            else if(c==='\r'){ /* ignore */ }
+            else field += c;
+          }
+        i++;
+      }
+      if(field.length || row.length){ pushF(); pushR(); }
+      return rows.filter(r => r.join('').trim()!=='' && !(r[0]||'').trim().startsWith('#'));
+    }
+
+    function toRecords(rows){
+      if(!rows.length) return [];
+      const H = rows[0].map(h => (h||'').toLowerCase().trim());
+      const iT = H.indexOf('term'); const iD = H.indexOf('definition'); const iG = H.indexOf('tags');
+      const out = [];
+      for(let i=1;i<rows.length;i++){
+        const r = rows[i] || [];
+        const term = (r[iT]||'').trim();
+        const definition = (r[iD]||'').trim();
+        const tags = (iG>=0 ? (r[iG]||'') : '').split(/\||,/).map(t=>t.trim()).filter(Boolean);
+        if(term || definition) out.push({term, definition, tags});
+      }
+      return out;
+    }
+
+    // Utils
+    const escHTML = s => String(s).replace(/[&<>\"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  const escRe = s => s.replace(/[.*+?^${}()|[\[\]]/g,'\\$&');
+    function highlight(text, query){
+      if(!query) return escHTML(text);
+      const re = new RegExp(`(${escRe(query)})`,'ig');
+      return escHTML(text).replace(re,'<mark>$1</mark>');
+    }
+
+    // Lightweight fuzzy match: subsequence scoring + includes fallback
+    function fuzzyMatch(query, hay){
+      if(!query) return true;
+      query = query.toLowerCase(); hay = hay.toLowerCase();
+      if(hay.includes(query)) return true; // fast path
+      // subsequence
+      let qi=0; for(let i=0;i<hay.length && qi<query.length;i++){ if(hay[i]===query[qi]) qi++; }
+      return qi===query.length; // true if all query chars found in order
+    }
+
+    function render(list, query=''){
+      grid.innerHTML = list.map(item => `
+        <div class="card">
+          <div class="term">${highlight(item.term, query)}</div>
+          <div class="def">${highlight(item.definition, query)}</div>
+          <div class="ctags">${(item.tags||[]).map(t=>`<span class="tag" data-tag="${escHTML(t)}">${highlight(t, query)}</span>`).join('')}</div>
+        </div>
+      `).join('');
+      shownEl.textContent = String(list.length);
+      totalEl.textContent = String(DATA.length);
+      // tag click -> toggle filter
+      grid.querySelectorAll('.ctags .tag').forEach(el=>{
+        el.addEventListener('click', ()=>{ toggleTag(el.getAttribute('data-tag')); });
+      });
+    }
+
+    function applyFilters(){
+      const qv = q.value.trim();
+      const letter = activeLetter;
+      const tags = [...activeTags];
+      let list = DATA.filter(({term, definition, tags: tg}) => {
+        // Letter filter (first alphanumeric char)
+        if(letter){
+          const first = (term.match(/[A-Za-z0-9]/)||[''])[0].toUpperCase() || '#';
+          const bucket = /[A-Z]/.test(first) ? first : '#';
+          if(bucket !== letter) return false;
+        }
+        // Tag filters (AND across selected tags)
+        if(tags.length && !tags.every(t => (tg||[]).includes(t))) return false;
+        // Search (fuzzy or contains across term/def/tags)
+        const hay = `${term}
+${definition}
+${(tg||[]).join(' ')}`;
+        return fuzzyToggle.checked ? fuzzyMatch(qv, hay) : (qv ? hay.toLowerCase().includes(qv.toLowerCase()) : true);
+      });
+      render(list, qv);
+      paintBars();
+    }
+
+    // A–Z bar and tags bar
+    function buildAZ(){
+      const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+      const chips = letters.concat('#').map(ch=>`<span class="chip" data-letter="${ch}">${ch}</span>`).join('');
+      azbar.innerHTML = chips;
+      azbar.addEventListener('click', (e)=>{
+        const el = e.target.closest('.chip'); if(!el) return;
+        activeLetter = (activeLetter===el.dataset.letter) ? '' : el.dataset.letter;
+        applyFilters();
+      });
+    }
+
+    function buildTagsBar(){
+      const set = new Set();
+      DATA.forEach(r => (r.tags||[]).forEach(t => set.add(t)));
+      const arr = [...set].sort((a,b)=>a.localeCompare(b));
+      tagsbar.innerHTML = arr.map(t=>`<span class="tag" data-tag="${escHTML(t)}">${escHTML(t)}</span>`).join('');
+      tagsbar.addEventListener('click', (e)=>{
+        const el = e.target.closest('.tag'); if(!el) return;
+        toggleTag(el.getAttribute('data-tag'));
+      });
+    }
+
+    function toggleTag(tag){
+      if(activeTags.has(tag)) activeTags.delete(tag); else activeTags.add(tag);
+      applyFilters();
+    }
+
+    function paintBars(){
+      // A–Z
+      azbar.querySelectorAll('.chip').forEach(el=>{
+        const on = el.getAttribute('data-letter')===activeLetter && activeLetter;
+        el.classList.toggle('active', !!on);
+      });
+      // Tags
+      tagsbar.querySelectorAll('.tag').forEach(el=>{
+        const on = activeTags.has(el.getAttribute('data-tag'));
+        el.classList.toggle('active', on);
+      });
+    }
+
+    clearBtn.addEventListener('click', ()=>{ activeLetter=''; activeTags.clear(); q.value=''; applyFilters(); });
+
+    // Input handlers
+    function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+    q.addEventListener('input', debounce(()=> applyFilters(), 80));
+    window.addEventListener('keydown', (e)=>{
+      if(e.key==='/' && document.activeElement!==q){ e.preventDefault(); q.focus(); }
+      if(e.key==='Escape' && (q.value || activeLetter || activeTags.size)){ e.preventDefault(); clearBtn.click(); }
+    });
+
+    // CSV loader
+    async function loadCSV(){
+      try {
+        const res = await fetch('glossary.csv', {cache:'no-cache'});
+        if (!res.ok) throw new Error('HTTP '+res.status);
+        const text = await res.text();
+        const rows = csvParse(text);
+        DATA = toRecords(rows);
+        totalEl.textContent = String(DATA.length);
+        buildAZ();
+        buildTagsBar();
+        applyFilters();
+      } catch (err) {
+        // If fetch fails, show a message and suggest file picker
+        grid.innerHTML = `<div class="card"><div class="term">No CSV loaded</div><div class="def">Could not load <code>glossary.csv</code>. Use the <b>Load CSV</b> button or drag-and-drop a file.</div></div>`;
+        console.error(err);
+      }
+    }
+
+    // init
+    loadCSV();
+  </script>
+</body>
+</html>
